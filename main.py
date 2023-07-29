@@ -205,7 +205,7 @@ def check_doc1():
 def qa_calc():
     
     #質問の入力
-    question0 = st.text_input('テーマを入力してください', key='question')
+    question0 = st.text_input('キーフレーズを入力してください', key='question')
     question = question0 + 'に関連する情報を教えてください。'
 
     if not question0:
