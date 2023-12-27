@@ -9,6 +9,7 @@ import json
 # from notion_client import Client
 import datetime
 from PIL import Image
+import re
 
 from llama_index import (
     NotionPageReader, 
@@ -88,9 +89,10 @@ def get_nearlynode1():
 
     with st.form('入力'):
         #質問の入力
-        theme = st.text_input('情報を集めるテーマを入力', key='question')
-        question = theme + 'に関連する情報を集めてください。'
-        num_node = st.number_input('抽出ノード数を指定してください', value=5, key='num_node')
+        question = st.text_input('質問を入力', key='question')
+        keyword1 = st.text_input('keyword1を入力', key='keyword1')
+        keyword2 = st.text_input('keyword2を入力', key='keyword2')
+        num_node = st.number_input('抽出するnode数: keywordを指定しない場合', key='num_node')
 
         submitted = st.form_submit_button('submitted')
     
@@ -133,55 +135,120 @@ def get_nearlynode1():
         #Faissにベクトルを登録
         index.add(docs)
 
-        # クエリとFaissから取り出すノード数の設定
-        k = num_node
+        # node抽出用の関数
+        def get_nodes(k):
+            # クエリとFaissから取り出すノード数の設定
+            k = k
 
-        # questionのベクトル化
-        query = embed_model.get_text_embedding(question)
-        query=np.array([query])
+            # questionのベクトル化
+            query = embed_model.get_text_embedding(question)
+            query=np.array([query])
 
-        # Faissからのquestionに近いノードの取り出し2個
-        reader = FaissReader(index)
-        documents = reader.load_data(query=query, id_to_text_map=id_to_text_map, k=k)
+            # Faissからのquestionに近いノードの取り出し2個
+            reader = FaissReader(index)
+            documents = reader.load_data(query=query, id_to_text_map=id_to_text_map, k=k)
 
-        #抽出ノード数の表示
-        st.write(f'count_allnode: {len(docs)} / count_node: {len(documents)}')
+            #抽出ノード数の表示
+            st.write(f'count_allnode: {len(docs)} / count_node: {len(documents)}')
 
-        #ドキュメントオブジェクトからテキストデータを抽出
-        texts = []
-        for document in documents:
-            text = document.text
-            texts.append(text)
+            #ドキュメントオブジェクトからテキストデータを抽出
+            texts = []
+            for document in documents:
+                text = document.text
+                texts.append(text)
 
-        #リスト内のテキストを結合
-        j_text = ''.join(texts)
+            #リスト内のテキストを結合
+            j_text = ''.join(texts)
 
-        #質問用のQAプロンプトを生成
-        QA_PROMPT_TMPL = \
-            f'# 命令書: \
-            あなたは優秀な文書編集者です。\
-            私たちは以下のコンテキスト情報を与えます。\
-            以下の制約を考慮しに対し指示に対して日本語で答えます。\
-            ---------------------\
-            # コンテキスト情報\
-            {j_text}\
-            --------------------\
-            \
-            # 指示\
-            上記のコンテキスト情報から{theme}に関する情報を抽出してください。\
-            \
-            # 制約\
-            - 重複していそうな内容でも極力まとめないでください。\
-            - このタスクで最高の結果を出すために、追加の情報が必要な場合は、質問をしてください。\
-            \
-            # 出力'
-            
+            return j_text
 
-        #コピー画像
-        link = '[chatgpt](https://chat.openai.com/)'
-        st.markdown(link, unsafe_allow_html=True)
+        #質問用のQAプロンプトを生成する関数
+        def make_prompt(question, j_text):
+            QA_PROMPT_TMPL = \
+                f'# 命令書: \
+                あなたは優秀な文書編集者です。\
+                私たちは以下のコンテキスト情報を与えます。\
+                以下の制約を考慮しに対し指示に対して日本語で答えます。\
+                ---------------------\
+                # コンテキスト情報\
+                {j_text}\
+                --------------------\
+                \
+                # 指示\
+                上記のコンテキスト情報から{question}に対して応答してください。\
+                \
+                # 制約\
+                - このタスクで最高の結果を出すために、追加の情報が必要な場合は、質問をしてください。\
+                \
+                # 出力'
+                
 
-        st.code(QA_PROMPT_TMPL, language='None')
+            #コピー画像
+            link = '[chatgpt](https://chat.openai.com/)'
+            st.markdown(link, unsafe_allow_html=True)
+
+            st.code(QA_PROMPT_TMPL, language='None')
+
+
+        k = 1
+        if keyword1:
+            if keyword2:
+                # nodeを抽出
+                j_text = get_nodes(k)
+                #keywordを含んでいるか？
+                hit_list = re.findall(f'{keyword1}|{keyword2}', j_text)
+
+                if len(hit_list) >= 2:
+                    # prompt作成
+                    make_prompt(question, j_text)
+                else:
+                    while len(hit_list) < 2:
+                        k += 1
+                        # nodeを抽出
+                        j_text = get_nodes(k)
+                        #keywordを含んでいるか？
+                        hit_list = re.findall(f'{keyword1}|{keyword2}', j_text)
+
+                    # prompt作成
+                    make_prompt(question, j_text)
+                    
+            else:
+                # nodeを抽出
+                j_text = get_nodes(k)
+                #keywordを含んでいるか？
+                hit_list = re.findall(f'{keyword1}', j_text)
+
+                if len(hit_list) >= 1:
+                    # prompt作成
+                    make_prompt(question, j_text)
+                else:
+                    while len(hit_list) < 1:
+                        k += 1
+                        # nodeを抽出
+                        j_text = get_nodes(k)
+                        #keywordを含んでいるか？
+                        hit_list = re.findall(f'{keyword1}', j_text)
+
+                    # prompt作成
+                    make_prompt(question, j_text)
+
+        else:
+            # nodeを抽出
+            j_text = get_nodes(num_node)
+
+            make_prompt(question, j_text)
+
+
+
+
+
+
+
+
+
+
+
+        
 
 
 #1次情報cbのindex化
